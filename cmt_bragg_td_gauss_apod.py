@@ -17,7 +17,6 @@ from scipy.integrate import solve_ivp
 import numpy as np
 
 import data_proc as dp
-import plots_class as pc
 import helper_func as helper
 import si_helper as si
 import cv2 as cv
