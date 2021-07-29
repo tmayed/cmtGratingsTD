@@ -209,4 +209,11 @@ class cplots():
                 ax1.vlines(x=self.x_scale*self.vline_values[ii],ymin=self.y_lim_values[0],ymax=self.y_lim_values[1],lw=self.vline_lw[ii],color=self.vline_color[ii],linestyle=self.vline_style[ii])
                 ax2.vlines(x=self.x_scale*self.vline_values[ii],ymin=self.y_lim_values[0],ymax=self.y_lim_values[1],lw=self.vline_lw[ii],color=self.vline_color[ii],linestyle=self.vline_style[ii])
 
+        if self.hline:
+            xlims1 = ax1.get_xlim()
+            xlims2 = ax2.get_xlim()
+            for ii in range(0, len(self.hline_values)):
+                ax1.hlines(y=self.y_scale*self.hline_values[ii],xmin=xlims1[0],xmax=xlims1[-1],lw=self.hline_lw[ii],color=self.hline_color[ii],linestyle=self.hline_style[ii])
+                ax2.hlines(y=self.y_scale*self.hline_values[ii],xmin=xlims2[0],xmax=xlims2[-1],lw=self.hline_lw[ii],color=self.hline_color[ii],linestyle=self.hline_style[ii])
+
         return fig

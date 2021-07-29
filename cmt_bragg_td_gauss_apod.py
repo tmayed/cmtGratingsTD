@@ -7,6 +7,8 @@ import time
 import datetime
 
 from scipy.integrate import solve_ivp
+from scipy.integrate import quad
+
 import numpy as np
 
 import si_helper as si
@@ -53,8 +55,8 @@ def main():
 
 ################################################
 
-    fps = 25
-    vid_len = 10
+    fps = 10
+    vid_len = 5
     cm.tv_nopo = fps * vid_len
 
 ################################################
@@ -128,6 +130,7 @@ def main():
 
     cm.x0 = -(cm.glen + cm.xbuffer) / 2
     cm.xv_src = (np.abs(cm.xv-cm.x0)).argmin()
+    cm.x0 = cm.xv[cm.xv_src]
 
     cm.condv = np.zeros(cm.xv_nopo, dtype=np.float64)
     for ii in range(0, cm.xv_nopo):
@@ -146,22 +149,33 @@ def main():
             cm.kappa[ii] = cm.kappa0
             cm.apod[ii] = np.exp(-cm.ascale*cm.xv[ii]**2/cm.glen**2)
 
+
 ################################################
 ################ SETUP TIMING ##################
 ################################################
 
+    cm.source_factor = 0.5*(cm.c**2)*(cm.sigma**2)
+    cm.source_amp = 4*cm.epsilon0*(cm.n0**2)*cm.int2amp*cm.source_factor
+
     cm.tamp_scale = 1
     cm.tamp = 1
 
-    cm.t0 = 1.5 * (cm.pulse_tlen / 2)
+    cm.t0 = 2.5 * (cm.pulse_tlen / 2)
     cm.tlen = cm.t0 + np.abs(2*cm.x0) / cm.vp
 
     cm.tv = np.linspace(0,cm.tlen,cm.tv_nopo,np.float64)
     cm.dt = cm.dx / (2*cm.vp)
 
     cm.tpulse = np.zeros(cm.tv_nopo, dtype=np.float64)
+    cm.tsource = np.zeros(cm.tv_nopo, dtype=np.float64)
+    cm.tsource_int = np.zeros(cm.tv_nopo, dtype=np.float64)
+    cm.tsource_try = np.zeros(cm.tv_nopo, dtype=np.float64)
+
     for ii in range(0, cm.tv_nopo):
         cm.tpulse[ii] = cm.tpulse_func(cm.tv[ii])
+        cm.tsource[ii] = cm.source_func(cm.tv[ii])
+        cm.tsource_int[ii] = quad(cm.source_func, 0, cm.tv[ii])[0]
+        cm.tsource_try[ii] = cm.source_try(cm.tv[ii],cm.x0)
 
 ################################################
 ################ OUTPUT GRAPHS #################
@@ -197,6 +211,9 @@ def main():
     cm.plots.use_title = True
 
     cm.plots.line_plot(cm.tv, cm.tpulse, filename='tpulse', save_dir=cm.save_dir)
+    cm.plots.line_plot(cm.tv, cm.tsource, filename='source', save_dir=cm.save_dir)
+    cm.plots.line_plot(cm.tv, cm.tsource_int, filename='source_int', save_dir=cm.save_dir)
+    cm.plots.line_plot(cm.tv, cm.tsource_try, filename='source_try', save_dir=cm.save_dir)
 
 ################################################
 ################################################
@@ -218,11 +235,26 @@ def main():
 ################################################
 ################################################
 
+    I = quad(cm.tpulse_func, 0, cm.t0)
+
+
+
+    print("I:",I[0])
+    print("I_scale:",(cm.mu0*cm.c**2)*I[0]/(2*cm.n0**2))
+
     sol = solve_ivp(cm.dfdt_func,[0,cm.t0],cm.modes0,t_eval=[0,cm.t0],rtol=1e-6,max_step=cm.dt,method='RK45')
     cm.max_ampsqr = np.real(np.abs(sol.y[cm.xv_src,1])**2)
 
     cm.tamp_scale = 1 / np.sqrt(cm.max_ampsqr)
     cm.tamp = cm.int2amp
+
+
+    # print("source scale:",cm.source_scale)
+    print("tamp_scale:",cm.tamp_scale)
+
+    print("tamp_amp:",cm.tamp_scale*cm.tamp)
+
+    print("amp_check:",2*cm.beta0*cm.n0*cm.int2amp/(cm.mu0*cm.c))
 
 ################################################
 ################ RUN SIMULATION ################
@@ -318,25 +350,44 @@ class cm_class():
         n_sqr = 1 + ((2.6734*l0**2) / (l0**2 - 0.01764)) + ((1.2290*l0**2) / (l0**2 - 0.05914)) + ((12.614*l0**2) / (l0**2 - 474.60))
         return np.sqrt(n_sqr)
 
+    def source_func_exp(self, t):
+        return np.exp(-self.source_factor*(t-self.t0)**2)
+
     def tpulse_func(self, t):
-        return self.tamp * self.tamp_scale * np.exp(-0.5*(self.c**2)*(self.sigma**2)*(t-self.t0)**2)
+        return self.tamp * self.tamp_scale * self.source_func_exp(t)
+
+    def source_func(self, t):
+        return -self.source_amp*(t-self.t0) * self.source_func_exp(t)
 
     def xpulse_func(self, t):
         z = t * self.vp
-        return self.xpulse_amp * np.exp(-0.5*(self.sigma**2)*(z-self.x0_input)**2)
+        return self.xpulse_amp * np.exp(-0.5*(self.sigma**2)*(z-self.x0)**2)
+
+    def source_try(self, t, z):
+        return self.int2amp * np.exp(-0.5*(self.sigma**2)*(z-self.x0-self.vp*(t-self.t0))**2)
 
     def dfdt_func(self,t,modes):
 
         self.u0[:] = modes[:self.xv_nopo]  # mode u - fwd
         self.v0[:] = modes[self.xv_nopo:]  # mode v - bwd
 
+        # self.u0[self.xv_src] = self.source_try(t,self.x0)
+
         self.dudz[:] = np.gradient(self.u0[:], self.xv, edge_order=2)
         self.dvdz[:] = np.gradient(self.v0[:], self.xv, edge_order=2)
 
-        self.source[self.xv_src] = self.tpulse_func(t)
+        self.dfdt[0,:] = -self.vp*(-self.source_func(t) + self.dudz + (self.loss + self.condv)*self.u0)
 
-        self.dfdt[0,:] = self.vp*(self.source - self.dudz - (self.loss + self.condv)*self.u0 - self.kappa*self.apod*self.v0)
-        self.dfdt[1,:] = self.vp*(self.dvdz - (self.loss + self.condv)*self.v0 + self.kappa*self.apod*self.u0)
+
+
+        # self.dfdt[1,:] = self.vp*(self.dvdz - (self.loss + self.condv)*self.v0 + self.kappa*self.apod*self.u0)
+
+        # self.source[self.xv_src] = self.tpulse_func(t)
+        # self.source[self.xv_src] = -(1/(2*self.epsilon0*(self.n0**2)))*self.source_func(t)
+
+        # self.dfdt[0,:] = self.vp*(self.source - self.dudz - (self.loss + self.condv)*self.u0 - self.kappa*self.apod*self.v0)
+        # self.dfdt[0,:] = -self.vp*(self.dudz + (self.loss + self.condv)*self.u0 + self.kappa*self.apod*self.v0)
+        # self.dfdt[1,:] = self.vp*(self.dvdz - (self.loss + self.condv)*self.v0 + self.kappa*self.apod*self.u0)
 
         return np.concatenate((self.dfdt[0,:],self.dfdt[1,:]), axis=0)
 

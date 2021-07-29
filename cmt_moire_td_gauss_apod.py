@@ -49,22 +49,23 @@ def main():
 ################################################
 
     cm.l0 = 1550e-9 # carrier wavelength (1/m)
-    cm.pfbw = -1
+    cm.pfbw = 1e9
     cm.intensity_cm2 = 1 # Intensity (W/cm^2)
     cm.xdamping = -1
     cm.xbuffer = -1
-    cm.glen = 15e-3
+    cm.glen = 0.5
     cm.extinction0 = 1e-9/4 # imaginary refractive index
+    # cm.dn = 1e-3
     cm.dn = 1e-3
     cm.cond = 1e4
     cm.ascale = 16
-    cm.ds = 1e-3
+    cm.ds = 5e-3
     cm.core = 10e-6
 
 ################################################
 
-    fps = 25
-    vid_len = 10
+    fps = 5
+    vid_len = 5
     cm.tv_nopo = fps * vid_len
 
 ################################################
@@ -80,11 +81,6 @@ def main():
     cm.dB = cm.l0 / (2 * cm.n0) # grating period (m)
     cm.kappa0 = (cm.dn * cm.k0) / 2 # grating strength (1/m)
 
-    # cm.int2amp = np.sqrt((2*cm.intensity*1e4)/(cm.c*cm.n0*cm.epsilon0))
-    # cm.ampsqr2int = cm.c*cm.n0*cm.epsilon0/2
-    # cm.ampsqr2int_cm2 = cm.c*cm.n0*cm.epsilon0/(2*1e4)
-    # cm.int2power = (1e-5) * cm.ampsqr2int
-
     cm.ampsqr2int = (cm.c*cm.n0*cm.epsilon0/2)
     cm.ampsqr2int_cm2 = cm.c*cm.n0*cm.epsilon0/(2*1e4)
     cm.amp = np.sqrt((2*cm.intensity_cm2*1e4)/(cm.c*cm.n0*cm.epsilon0))
@@ -93,14 +89,9 @@ def main():
     cm.power = (cm.core**2) * cm.intensity
 
     print('------------------------')
-
     print('power :' + si.si_input_text(cm.power) + 'W')
     print('intensity :' + si.si_input_text(cm.intensity) + 'W/m^2')
     print('intensity :' + si.si_input_text(cm.intensity_cm2) + 'W/cm^2')
-
-    # print(si.si_input_text(cm.int2power) + 'W')
-    # print(si.si_input_text(cm.ampsqr2int) + 'W/m^2')
-    # print(si.si_input_text(cm.ampsqr2int_cm2) + 'W/cm^2')
 
     if cm.pfbw < 0:
         cm.pfbw = 4*cm.n0*cm.dn*cm.c/(cm.l0*(4*cm.n0**2 - cm.dn))
@@ -144,7 +135,8 @@ def main():
     if cm.xlen <= 0:
         cm.xlen = cm.pulse_xlen
 
-    cm.dx = cm.pulse_xlen / 1000
+    cm.dx = cm.ds / 10
+
     cm.xv_nopo = int(cm.xlen/cm.dx) + 1
     cm.xv = np.linspace(-cm.xlen/2,cm.xlen/2,cm.xv_nopo,dtype=np.float64)
     cm.dx = np.abs(cm.xv[1]-cm.xv[0])
@@ -167,8 +159,43 @@ def main():
     for ii in range(0, cm.xv_nopo):
         if np.abs(cm.xv[ii]) <= cm.glen/2:
             cm.loss[ii] = cm.absorb
-            cm.kappa[ii] = cm.kappa0*np.cos(2*np.pi*cm.xv[ii]/cm.ds)
-            cm.apod[ii] = np.exp(-cm.ascale*cm.xv[ii]**2/cm.glen**2)
+            cm.kappa[ii] = cm.kappa0*cm.moire_func(cm.xv[ii])
+            cm.apod[ii] = cm.apod_func(cm.xv[ii])
+
+################################################
+################################################
+################################################
+
+    cm.modes0 = np.zeros(2,dtype=np.complex128)
+    cm.modes0[0] = 1
+    cm.modes0[1] = 0
+
+    cm.xv_glen_nopo = int(cm.glen/cm.dx) + 1
+    cm.xv_glen = np.linspace(-cm.glen/2,cm.glen/2,cm.xv_glen_nopo,dtype=np.float64)
+
+    sol = solve_ivp(cm.duv,[cm.glen/2,-cm.glen/2],cm.modes0,t_eval=np.flip(cm.xv_glen),rtol=1e-6,method='RK45')
+
+    cm.modes = np.zeros((2,cm.xv_glen_nopo),dtype=np.complex128)
+    cm.modes[0,:] = np.flip(sol.y[0,:])/sol.y[0,-1]
+    cm.modes[1,:] = np.flip(sol.y[1,:])/sol.y[0,-1]
+
+    poynting = cm.c*np.real(np.conj(cm.modes[0,:])*cm.modes[0,:]-np.conj(cm.modes[1,:])*cm.modes[1,:])
+    edensity = cm.n0*np.real(np.conj(cm.modes[0,:])*cm.modes[0,:]+np.conj(cm.modes[1,:])*cm.modes[1,:])
+
+    cm.gv_func = np.zeros(cm.xv_glen_nopo,dtype=np.float64)
+    cm.gv_func[:] = poynting[:] / edensity[:]
+    cm.gv = np.trapz(poynting, cm.xv_glen) / np.trapz(edensity, cm.xv_glen)
+
+    cm.gv_apod = np.zeros(cm.xv_glen_nopo,dtype=np.float64)
+    cm.gv_moire = np.zeros(cm.xv_glen_nopo,dtype=np.float64)
+    for ii in range(0, cm.xv_glen_nopo):
+        cm.gv_apod[ii] = cm.apod_func(cm.xv_glen[ii])
+        cm.gv_moire[ii] = cm.moire_func(cm.xv_glen[ii])
+
+    cm.gv_time =  cm.glen/cm.gv
+
+    print("gv_time:",si.si_time_text(cm.gv_time))
+    print("gv/vp: ", cm.gv/cm.vp)
 
 ################################################
 ################ SETUP TIMING ##################
@@ -178,7 +205,7 @@ def main():
     cm.tamp = 1
 
     cm.t0 = 1.5 * (cm.pulse_tlen / 2)
-    cm.tlen = cm.t0 + np.abs(2*cm.x0) / cm.vp
+    cm.tlen = cm.t0 + cm.xbuffer/cm.vp + cm.gv_time
 
     cm.tv = np.linspace(0,cm.tlen,cm.tv_nopo,np.float64)
     cm.dt = cm.dx / (2*cm.vp)
@@ -204,6 +231,10 @@ def main():
     cm.plots.x_scale = si.si_scale(np.max(cm.xv))
     cm.plots.x_label = 'Length (' + si.si_prefix(np.max(cm.xv)) + 'm)'
 
+    cm.plots.line_plot(cm.xv_glen, cm.gv_func/cm.vp, filename='gv', save_dir=cm.save_dir)
+    cm.plots.line_plot(cm.xv_glen, cm.gv_apod, filename='gv_apod', save_dir=cm.save_dir)
+    cm.plots.line_plot(cm.xv_glen, cm.gv_moire, filename='gv_moire', save_dir=cm.save_dir)
+
     cm.plots.line_plot(cm.xv, cm.condv, filename='condv', save_dir=cm.save_dir)
     cm.plots.line_plot(cm.xv, cm.kappa, filename='kappa', save_dir=cm.save_dir)
     cm.plots.line_plot(cm.xv, cm.apod, filename='apod', save_dir=cm.save_dir)
@@ -214,10 +245,10 @@ def main():
     cm.plots.x_label = 'Time (' + si.si_prefix(np.max(cm.tv)) + 's)'
 
     cm.plots.vline = True
-    cm.plots.vline_values = [cm.t0-cm.pulse_tlen/2,cm.t0+cm.pulse_tlen/2]
-    cm.plots.vline_lw = [2,1]
-    cm.plots.vline_color = ['g','g']
-    cm.plots.vline_style = ['--','--']
+    cm.plots.vline_values = [cm.t0-cm.pulse_tlen/2,cm.t0,cm.t0+cm.pulse_tlen/2]
+    cm.plots.vline_lw = [2,2,2]
+    cm.plots.vline_color = ['g','r','g']
+    cm.plots.vline_style = ['--','-','--']
     cm.plots.use_title = True
 
     cm.plots.line_plot(cm.tv, cm.tpulse, filename='tpulse', save_dir=cm.save_dir)
@@ -299,7 +330,8 @@ def main():
     cm.plots.vline_values = [-cm.x0-cm.xbuffer/2,-cm.x0,-cm.x0+cm.xbuffer/2,cm.x0-cm.xbuffer/2,cm.x0,cm.x0+cm.xbuffer/2]
     cm.plots.vline_lw = [1,3,1,1,3,1]
     cm.plots.vline_color = ['g','r','g','g','r','g']
-    cm.plots.vline_style = ['--','--','--','--','--','--']
+    cm.plots.vline_style = ['--','--','-','-','--','--']
+
     cm.plots.use_title = True
 
     ################################################
@@ -346,6 +378,19 @@ class cm_class():
     def xpulse_func(self, t):
         z = t * self.vp
         return self.xpulse_amp * np.exp(-0.5*(self.sigma**2)*(z-self.x0_input)**2)
+
+    def moire_func(self, t):
+        return np.cos((2*np.pi*(t-self.glen/2))/self.ds)
+
+    def apod_func(self, t):
+        return np.exp(-self.ascale*t**2/self.glen**2)
+
+    def duv(self, t, modes):
+        moire = self.moire_func(t)
+        apod = self.apod_func(t)
+        dudz = -self.kappa0*apod*moire*modes[1]
+        dvdz = -self.kappa0*apod*moire*modes[0]
+        return [dudz,dvdz]
 
     def dfdt_func(self,t,modes):
 
